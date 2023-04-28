@@ -1,6 +1,6 @@
 [package]
 name = "bumv"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "bumv (bulk move) lets you use your favorite editor to rename files"
 homepage = "https://github.com/cbonitz/bumv"

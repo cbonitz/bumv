@@ -2,20 +2,26 @@ use crate::{
     create_rename_mapping, create_rename_prompt, create_temp_file_content, parse_temp_file_content,
     read_directory_files, read_directory_files_recursive, rename_files,
 };
-use std::fs::File;
+use std::{fs::File, io::Write};
 use tempfile::tempdir;
 
 fn create_test_files(dir: &tempfile::TempDir) {
+    let ignore = dir.path().join(".ignore");
     let file1 = dir.path().join("file1.txt");
     let file2 = dir.path().join("file2.txt");
+    let ignored: std::path::PathBuf = dir.path().join("ignored.txt");
     let file3 = dir.path().join("subdir").join("file3.txt");
     let file4 = dir.path().join("subdir").join("file4.txt");
 
     let subdir = dir.path().join("subdir");
     std::fs::create_dir_all(&subdir).unwrap();
 
+    let mut ignore = File::create(&ignore).unwrap();
+    ignore.write_all("ignored.txt".as_bytes()).unwrap();
+    ignore.flush().unwrap();
     File::create(&file1).unwrap();
     File::create(&file2).unwrap();
+    File::create(&ignored).unwrap();
     File::create(&file3).unwrap();
     File::create(&file4).unwrap();
 }
@@ -29,8 +35,23 @@ fn test_read_directory_files_nonrecursive() {
     let files = read_directory_files(dir.path(), false).unwrap();
 
     assert_eq!(files.len(), 2);
-    assert!(files[0].file_name().unwrap() == "file1.txt");
-    assert!(files[1].file_name().unwrap() == "file2.txt");
+    assert_eq!(files[0].file_name().unwrap(), "file1.txt");
+    assert_eq!(files[1].file_name().unwrap(), "file2.txt");
+}
+
+/// Validate non-recursive reading of files ignoring ignore files
+#[test]
+fn test_read_directory_files_nonrecursive_no_ignore() {
+    let dir = tempdir().unwrap();
+    create_test_files(&dir);
+
+    let files = read_directory_files(dir.path(), true).unwrap();
+
+    assert_eq!(files.len(), 4);
+    assert_eq!(files[0].file_name().unwrap(), ".ignore");
+    assert_eq!(files[1].file_name().unwrap(), "file1.txt");
+    assert_eq!(files[2].file_name().unwrap(), "file2.txt");
+    assert_eq!(files[3].file_name().unwrap(), "ignored.txt");
 }
 
 /// Validate recursive reading of files
@@ -47,6 +68,24 @@ fn test_read_directory_files_recursive() {
     assert_eq!(files[1].file_name().unwrap(), "file2.txt");
     assert_eq!(files[2].file_name().unwrap(), "file3.txt");
     assert_eq!(files[3].file_name().unwrap(), "file4.txt");
+}
+
+/// Validate recursive reading of files
+#[test]
+fn test_read_directory_files_recursive_no_ignore() {
+    let dir = tempdir().unwrap();
+    create_test_files(&dir);
+
+    let files = read_directory_files_recursive(dir.path(), true).unwrap();
+
+    assert_eq!(files.len(), 6);
+    // assertions take into account temp dir prefixes
+    assert_eq!(files[0].file_name().unwrap(), ".ignore");
+    assert_eq!(files[1].file_name().unwrap(), "file1.txt");
+    assert_eq!(files[2].file_name().unwrap(), "file2.txt");
+    assert_eq!(files[3].file_name().unwrap(), "ignored.txt");
+    assert_eq!(files[4].file_name().unwrap(), "file3.txt");
+    assert_eq!(files[5].file_name().unwrap(), "file4.txt");
 }
 
 /// Validate the content of the temporary file.

@@ -9,7 +9,10 @@ use structopt::StructOpt;
 use tempfile::NamedTempFile;
 
 #[derive(StructOpt, Debug)]
-#[structopt(name = "bumv", about = "A bulk file renaming utility.")]
+#[structopt(
+    name = "bumv",
+    about = "A bulk file renaming utility that uses your editor as its UI. Invoke the utility, edit the filenames, save the temporary file, close the editor and confirm changes."
+)]
 struct Opt {
     /// Recursively rename files in subdirectories
     #[structopt(short, long)]
@@ -30,8 +33,7 @@ fn sort_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
 fn read_directory_files(base_path: &Path, no_ignore_files: bool) -> Result<Vec<PathBuf>> {
     Ok(sort_paths(
         WalkBuilder::new(base_path)
-            .ignore(!no_ignore_files)
-            .git_ignore(!no_ignore_files)
+            .standard_filters(!no_ignore_files)
             .build()
             .into_iter()
             .filter_map(Result::ok)
@@ -45,8 +47,7 @@ fn read_directory_files(base_path: &Path, no_ignore_files: bool) -> Result<Vec<P
 fn read_directory_files_recursive(base_path: &Path, no_ignore_files: bool) -> Result<Vec<PathBuf>> {
     Ok(sort_paths(
         WalkBuilder::new(base_path)
-            .ignore(!no_ignore_files)
-            .git_ignore(!no_ignore_files)
+            .standard_filters(!no_ignore_files)
             .build()
             .into_iter()
             .filter_map(Result::ok)

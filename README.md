@@ -5,7 +5,7 @@ It was created becuase the author found bulk file renaming very tedious compared
 
 ## Usage
 
-By default, `bumv` will let you rename the files in the current directory non-recursively.
+By default, `bumv` will let you rename the files in the current directory non-recursively, respecting git ignore definitions and `.ignore` files.
 Invoked on this project directory, it would open the following list of files in `EDITOR` (defaulting to VS Code):
 
 ```
@@ -38,6 +38,13 @@ The following safety checks are implemented and tested:
 - Inputs that will obviously lead to overwriting of files are rejected right away.
 - To avoid overwriting existing of files due to race conditions or renaming order, `bumv` verifies before each renaming operation that a file with the target filename does not exist.
 - Before renaming is performed, `bumv` verifies that the file list presented to the user still exactly matches what is present on the file system.
+
+### Options
+
+```
+-n, --no-ignore    Do not observe ignore files
+-r, --recursive    Recursively rename files in subdirectories
+```
 
 ### Non-Features
 

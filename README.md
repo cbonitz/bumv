@@ -1,7 +1,7 @@
 # bumv, a Bulk File Renaming Utility
 
 `bumv` (bulk move) lets you use your favorite editor to rename files.
-It was created becuase the author found bulk file renaming very tedious compared to editing strings in modern editors. Editorsh provide powerful search and replace functionality as well as multi cursor editing, all of which are helpful for bulk file renaming.
+It was created becuase the author found bulk file renaming very tedious compared to editing strings in modern editors. Editors provide powerful search and replace functionality as well as multi cursor editing, all of which are helpful for bulk file renaming.
 
 # Usage
 
@@ -38,7 +38,7 @@ While `bumv` checks that no files will be overwritten and that the filenames hav
 
 This project was done as a playground for AI-assisted programming. The original code was written by ChatGPT 4 based on a loose specification and surprisingly both compiled and worked right away.
 
-The generated unit tests only covered insignificant parts of the code. Thus, the code had to be refactored for testability, and a lot of tests were written by hand.
+The generated unit tests were insufficient. Thus, the code had to be refactored for testability, and a lot of tests were written by hand.
 
 Several safeguards and improvements had to be added manually based on outcomes of local testing and thinking carefully about program behavior.
 

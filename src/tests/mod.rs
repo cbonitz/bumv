@@ -1,6 +1,7 @@
 use crate::{
-    create_rename_mapping, create_rename_prompt, create_temp_file_content, parse_temp_file_content,
-    read_directory_files, read_directory_files_recursive, rename_files,
+    create_editable_temp_file_content, create_human_readable_rename_mapping, create_rename_mapping,
+    ensure_files_did_not_change, parse_temp_file_content, read_directory_files,
+    read_directory_files_recursive, rename_files,
 };
 use std::{fs::File, io::Write};
 use tempfile::tempdir;
@@ -95,7 +96,7 @@ fn test_create_temp_file_content() {
     create_test_files(&dir);
     let files = read_directory_files_recursive(dir.path(), false).unwrap();
 
-    let content = create_temp_file_content(&files);
+    let content = create_editable_temp_file_content(&files);
 
     let lines: Vec<_> = content.split("\n").collect();
     // assertions take into account temp dir prefixes
@@ -103,6 +104,33 @@ fn test_create_temp_file_content() {
     assert!(lines[1].ends_with("/file2.txt"));
     assert!(lines[2].ends_with("/subdir/file3.txt"));
     assert!(lines[3].ends_with("/subdir/file4.txt"));
+}
+
+/// Test the file change check
+#[test]
+fn test_ensure_files_did_not_change_no_changes() {
+    let dir = tempdir().unwrap();
+    create_test_files(&dir);
+    let previous_files = read_directory_files_recursive(dir.path(), false).unwrap();
+    let mut current_files = previous_files.clone();
+
+    assert!(ensure_files_did_not_change(&previous_files, &current_files).is_ok());
+
+    current_files.pop();
+
+    assert!(ensure_files_did_not_change(&previous_files, &current_files).is_err());
+}
+
+/// Test the file change check with changes
+#[test]
+fn test_ensure_files_did_not_change() {
+    let dir = tempdir().unwrap();
+    create_test_files(&dir);
+    let files = read_directory_files_recursive(dir.path(), false).unwrap();
+    let mut changed_files = files.clone();
+    changed_files.pop();
+
+    assert!(ensure_files_did_not_change(&files, &changed_files).is_err())
 }
 
 /// Validate renaming a file in the current directory
@@ -121,7 +149,7 @@ fn scenario_test_rename_files() {
     create_test_files(&dir);
 
     let files = read_directory_files(dir.path(), false).unwrap();
-    let content = create_temp_file_content(&files);
+    let content = create_editable_temp_file_content(&files);
 
     // simulate file editing
     let new_files = parse_temp_file_content(content.replace("file1.txt", "renamed_file1.txt"));
@@ -129,7 +157,7 @@ fn scenario_test_rename_files() {
     let rename_mapping = create_rename_mapping(&files, &new_files).unwrap();
 
     // verify rename prompt format
-    let rename_prompt = create_rename_prompt(&rename_mapping);
+    let rename_prompt = create_human_readable_rename_mapping(&rename_mapping);
     let (from, to) = rename_prompt.split_once(" -> ").unwrap();
     // assertions take into account temp dir prefixes
     assert!(from.ends_with("file1.txt"));
@@ -168,7 +196,7 @@ fn scenario_test_rename_files_recursive() {
     create_test_files(&dir);
 
     let files = read_directory_files_recursive(dir.path(), false).unwrap();
-    let content = create_temp_file_content(&files);
+    let content = create_editable_temp_file_content(&files);
 
     // simulate file editing
     let new_files = parse_temp_file_content(
@@ -180,7 +208,7 @@ fn scenario_test_rename_files_recursive() {
     let rename_mapping = create_rename_mapping(&files, &new_files).unwrap();
 
     // verify rename prompt format
-    let rename_prompt = create_rename_prompt(&rename_mapping);
+    let rename_prompt = create_human_readable_rename_mapping(&rename_mapping);
     let (rename_prompt_1, rename_prompt_2) = rename_prompt.split_once("\n").unwrap();
     let (from, to) = rename_prompt_1.split_once(" -> ").unwrap();
     // assertions take into account temp dir prefixes

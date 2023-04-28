@@ -195,18 +195,22 @@ fn read_files(config: &BumvConfiguration) -> Result<Vec<PathBuf>> {
     }
 }
 
+/// Prompt the user for confirmation
 fn prompt_for_confirmation(human_readable_mapping: String) -> bool {
     println!("{}", human_readable_mapping);
     let input = rprompt::prompt_reply("\nRename: [Y/n]? ").unwrap();
     matches!(input.to_lowercase().as_str(), "y" | "")
 }
 
+/// Edit the files in a temp file and return the modified content
 fn edit_files_in_temp_file(temp_file_content: String) -> Result<String> {
     let temp_file = write_editable_temp_file(temp_file_content)?;
     let_user_edit_temp_file(&temp_file)?;
     read_temp_file(&temp_file)
 }
 
+/// Bulk rename files according to the configuration
+/// `edit_function` and `prompt_function` are passed as parameters to allow for testing.
 fn bulk_rename(
     config: BumvConfiguration,
     edit_function: fn(String) -> Result<String>,

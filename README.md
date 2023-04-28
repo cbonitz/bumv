@@ -34,7 +34,7 @@ While `bumv` checks that no files will be overwritten and that the filenames hav
 
 `cargo install bumv`
 
-# Colophonium
+# About This Project
 
 This project was done as a playground for AI-assisted programming. The original code was written by ChatGPT 4 based on a loose specification and surprisingly both compiled and worked right away.
 

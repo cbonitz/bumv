@@ -21,6 +21,9 @@ struct BumvConfiguration {
     /// Do not observe ignore files
     #[structopt(short, long)]
     no_ignore: bool,
+    /// Use VS Code as editor
+    #[structopt(short = "c", long)]
+    use_vscode: bool,
     /// Base path for the operation
     #[structopt(parse(from_os_str))]
     base_path: Option<PathBuf>,
@@ -76,21 +79,17 @@ fn write_editable_temp_file(content: String) -> Result<NamedTempFile> {
 }
 
 /// Let the user edit the temp file
-fn let_user_edit_temp_file(temp_file: &NamedTempFile) -> Result<()> {
-    let editor = std::env::var("EDITOR");
+fn let_user_edit_temp_file(temp_file: &NamedTempFile, editor_name: String) -> Result<()> {
     let temp_path = temp_file
         .path()
         .to_str()
         .context("Failed to convert path to string")?;
-    let status = match editor {
-        Ok(editor) => Command::new(editor).arg(temp_path).status().unwrap(),
-        // the author loves VS Code's multi cursor editing
-        Err(_) => Command::new("code")
-            .arg("--wait")
-            .arg(temp_path)
-            .status()
-            .unwrap(),
-    };
+    let mut command = Command::new(editor_name.clone());
+    // VS code needs the --wait flag to wait for the user to close the editor
+    if editor_name == "code" {
+        command.arg("--wait");
+    }
+    let status = command.arg(temp_path).status().unwrap();
     anyhow::ensure!(status.success(), "Editor exited with an error");
     Ok(())
 }
@@ -203,9 +202,9 @@ fn prompt_for_confirmation(human_readable_mapping: String) -> bool {
 }
 
 /// Edit the files in a temp file and return the modified content
-fn edit_files_in_temp_file(temp_file_content: String) -> Result<String> {
+fn edit_files_in_temp_file(temp_file_content: String, editor_name: String) -> Result<String> {
     let temp_file = write_editable_temp_file(temp_file_content)?;
-    let_user_edit_temp_file(&temp_file)?;
+    let_user_edit_temp_file(&temp_file, editor_name)?;
     read_temp_file(&temp_file)
 }
 
@@ -213,12 +212,13 @@ fn edit_files_in_temp_file(temp_file_content: String) -> Result<String> {
 /// `edit_function` and `prompt_function` are passed as parameters to allow for testing.
 fn bulk_rename(
     config: BumvConfiguration,
-    edit_function: fn(String) -> Result<String>,
+    editor_name: String,
+    edit_function: fn(String, String) -> Result<String>,
     prompt_function: Box<dyn FnOnce(String) -> bool>,
 ) -> Result<()> {
     let files = read_files(&config)?;
     let temp_file_content = create_editable_temp_file_content(&files);
-    let modified_temp_file_content = edit_function(temp_file_content)?;
+    let modified_temp_file_content = edit_function(temp_file_content, editor_name)?;
     let new_files = parse_temp_file_content(modified_temp_file_content);
 
     let rename_mapping = create_rename_mapping(&files, &new_files)?;
@@ -246,8 +246,17 @@ fn bulk_rename(
 }
 fn main() -> Result<()> {
     let config = BumvConfiguration::from_args();
+    let editor_var = std::env::var("EDITOR");
+    let editor_name = match (config.use_vscode, editor_var) {
+        (true, _) => "code".to_string(),
+        (false, Ok(editor)) => editor,
+        // default to VS code
+        (false, Err(_)) => "code".to_string(),
+    };
+
     bulk_rename(
         config,
+        editor_name,
         edit_files_in_temp_file,
         Box::new(prompt_for_confirmation),
     )

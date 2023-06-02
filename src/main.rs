@@ -9,7 +9,7 @@ use std::process::Command;
 use structopt::StructOpt;
 use tempfile::NamedTempFile;
 
-#[derive(StructOpt, Debug)]
+#[derive(StructOpt, Debug, Clone)]
 #[structopt(
     name = "bumv",
     about = "bumv (bulk move) - A bulk file renaming utility that uses your editor as its UI. Invoke the utility, edit the filenames, save the temporary file, close the editor and confirm changes."
@@ -29,130 +29,71 @@ struct BumvConfiguration {
     base_path: Option<PathBuf>,
 }
 
-/// Deterministically sort paths
-fn sort_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
-    paths.sort_by_key(|path| path.to_string_lossy().to_string());
-    paths
-}
-
-/// Read the files in `base_path` non-recursively, optionally ignoring ignore files
-fn read_directory_files(base_path: &Path, no_ignore_files: bool) -> Result<Vec<PathBuf>> {
-    Ok(sort_paths(
-        WalkBuilder::new(base_path)
-            .standard_filters(!no_ignore_files)
+impl BumvConfiguration {
+    fn file_list(&self) -> Vec<PathBuf> {
+        let base_path = self.base_path.as_deref().unwrap_or_else(|| Path::new("."));
+        let builder = WalkBuilder::new(base_path)
+            .standard_filters(!self.no_ignore)
             .build()
             .filter_map(Result::ok)
             .map(|entry| entry.into_path())
-            .filter(|path| path.is_file())
-            .filter(|path| path.parent() == Some(base_path))
-            .collect(),
-    ))
-}
-
-/// read the files in `base_path` recursively, optionally ignoring ignore files
-fn read_directory_files_recursive(base_path: &Path, no_ignore_files: bool) -> Result<Vec<PathBuf>> {
-    Ok(sort_paths(
-        WalkBuilder::new(base_path)
-            .standard_filters(!no_ignore_files)
-            .build()
-            .filter_map(Result::ok)
-            .map(|entry| entry.into_path())
-            .filter(|path| path.is_file())
-            .collect(),
-    ))
-}
-
-/// Create the content of the temp file the user will edit
-fn create_editable_temp_file_content(files: &[PathBuf]) -> String {
-    files
-        .iter()
-        .map(|f| f.to_string_lossy().to_string())
-        .collect::<Vec<String>>()
-        .join("\n")
-}
-
-/// Write the content of the temp file the user will edit
-fn write_editable_temp_file(content: String) -> Result<NamedTempFile> {
-    let mut temp_file = NamedTempFile::new()?;
-    write!(temp_file, "{}", content)?;
-    Ok(temp_file)
-}
-
-/// Let the user edit the temp file
-fn let_user_edit_temp_file(temp_file: &NamedTempFile, editor_name: String) -> Result<()> {
-    let temp_path = temp_file
-        .path()
-        .to_str()
-        .context("Failed to convert path to string")?;
-    let mut command = Command::new(editor_name.clone());
-    // VS code needs the --wait flag to wait for the user to close the editor
-    if editor_name == "code" {
-        command.arg("--wait");
+            .filter(|path| path.is_file());
+        let mut result: Vec<_> = if !self.recursive {
+            // non-recursive mode: only include files in the base path
+            builder
+                .filter(|path| path.parent() == Some(base_path))
+                .collect()
+        } else {
+            builder.collect()
+        };
+        // ensure deterministic order
+        result.sort_by_key(|path| path.to_string_lossy().to_string());
+        result
     }
-    let status = command.arg(temp_path).status().unwrap();
-    anyhow::ensure!(status.success(), "Editor exited with an error");
-    Ok(())
 }
 
-/// Read the temp file the user edited and parse the content
-fn read_temp_file(temp_file: &NamedTempFile) -> Result<String> {
-    let mut content = String::new();
-    File::open(temp_file.path())?.read_to_string(&mut content)?;
-    Ok(content)
+struct RenamingPlan {
+    request: RenamingRequest,
+    steps: Vec<(PathBuf, PathBuf)>,
 }
 
-/// Parse the content of the temp file the user edited
-fn parse_temp_file_content(content: String) -> Vec<PathBuf> {
-    content
-        .lines()
-        // skip empty lines (usually the last line)
-        .filter(|line| !line.is_empty())
-        .map(PathBuf::from)
-        .collect()
-}
-
-/// Create a mapping from old to new filenames
-fn create_rename_mapping<'a>(
-    files: &'a [PathBuf],
-    new_files: &'a [PathBuf],
-) -> Result<Vec<(&'a PathBuf, &'a PathBuf)>> {
-    if files.len() != new_files.len() {
-        anyhow::bail!("The number of files in the edited file does not match the original.");
-    }
-
-    let unique_new_files: HashSet<&PathBuf> = new_files.iter().collect();
-    if unique_new_files.len() != new_files.len() {
-        anyhow::bail!("There is a name clash in the edited files.");
-    }
-
-    let result: Vec<_> = files
-        .iter()
-        .zip(new_files.iter())
-        .filter(|(old, new)| old != new)
-        .collect();
-
-    for (old, new) in &result {
-        if old.parent() != new.parent() {
-            anyhow::bail!(
-                "Renaming directories and moving files to other directories is currently not supported.",
-            );
+impl RenamingPlan {
+    fn try_new(request: RenamingRequest) -> Result<Self> {
+        for (old, new) in request.mapping.iter() {
+            if old.parent() != new.parent() {
+                anyhow::bail!(
+                    "Renaming directories and moving files to other directories is currently not supported.",
+                );
+            }
         }
+
+        let steps = request.mapping.clone();
+
+        Ok(RenamingPlan { request, steps })
     }
 
-    Ok(result)
-}
+    fn is_empty(&self) -> bool {
+        self.request.is_empty()
+    }
 
-/// Create a human readable representation of the rename mapping
-fn create_human_readable_rename_mapping(rename_mapping: &[(&PathBuf, &PathBuf)]) -> String {
-    rename_mapping
-        .iter()
-        .map(|(old, new)| format!("{} -> {}", old.to_string_lossy(), new.to_string_lossy()))
-        .collect::<Vec<_>>()
-        .join("\n")
+    /// Create a human readable representation of the rename mapping
+    fn human_readable_rename_mapping(&self) -> String {
+        self.steps
+            .iter()
+            .map(|(old, new)| format!("{} -> {}", old.to_string_lossy(), new.to_string_lossy()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn execute(&self) -> Result<String> {
+        self.request.ensure_files_did_not_change()?;
+        rename_files(&self.steps)?;
+        Ok("Files renamed successfully.".to_string())
+    }
 }
 
 /// Perform the actual renaming of the files
-fn rename_files(rename_mapping: &Vec<(&PathBuf, &PathBuf)>) -> Result<()> {
+fn rename_files(rename_mapping: &Vec<(PathBuf, PathBuf)>) -> Result<()> {
     for (old, new) in rename_mapping {
         if new.exists() {
             anyhow::bail!(
@@ -165,77 +106,132 @@ fn rename_files(rename_mapping: &Vec<(&PathBuf, &PathBuf)>) -> Result<()> {
     Ok(())
 }
 
-/// Ensure that the files did not change while the user was editing them
-fn ensure_files_did_not_change(
-    previous_files: &[PathBuf],
-    current_files: &[PathBuf],
-) -> Result<()> {
-    let mut files = previous_files.to_vec();
-    let mut new_files = current_files.to_vec();
-    files.sort();
-    new_files.sort();
-    anyhow::ensure!(
-        files == new_files,
-        "The files in the directory changed while you were editing them."
-    );
-    Ok(())
+/// Create the content of the temp file the user will edit
+fn create_editable_temp_file_content(files: &[PathBuf]) -> String {
+    files
+        .iter()
+        .map(|f| f.to_string_lossy().to_string())
+        .collect::<Vec<String>>()
+        .join("\n")
 }
 
-/// Read the files in `base_path` according to the configuration
-fn read_files(config: &BumvConfiguration) -> Result<Vec<PathBuf>> {
-    let base_path = config
-        .base_path
-        .as_deref()
-        .unwrap_or_else(|| Path::new("."));
-    if config.recursive {
-        read_directory_files_recursive(base_path, config.no_ignore)
-    } else {
-        read_directory_files(base_path, config.no_ignore)
+/// Parse the content of the temp file the user edited
+fn parse_temp_file_content(content: String) -> Vec<PathBuf> {
+    content
+        .lines()
+        // skip empty lines (usually the last line)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+struct RenamingRequest {
+    config: BumvConfiguration,
+    all_files_at_creation_time: Vec<PathBuf>,
+    mapping: Vec<(PathBuf, PathBuf)>,
+}
+
+impl RenamingRequest {
+    fn try_new<F: FnOnce(String) -> Result<String>>(
+        config: BumvConfiguration,
+        edit_function: F,
+    ) -> Result<Self> {
+        let original_filenames = config.file_list();
+        let temp_file_content = create_editable_temp_file_content(&original_filenames);
+        let modified_temp_file_content = edit_function(temp_file_content)?;
+        let edited_filenames = parse_temp_file_content(modified_temp_file_content);
+        if original_filenames.len() != edited_filenames.len() {
+            anyhow::bail!("The number of files in the edited file does not match the original.");
+        }
+        let unique_new_filenames: HashSet<&PathBuf> = edited_filenames.iter().collect();
+        if unique_new_filenames.len() != edited_filenames.len() {
+            anyhow::bail!("There is a name clash in the edited files.");
+        }
+
+        let mapping: Vec<(PathBuf, PathBuf)> = original_filenames
+            .iter()
+            .zip(edited_filenames.iter())
+            .filter(|(old, new)| old != new)
+            .map(|(old, new)| (old.clone(), new.clone()))
+            .collect();
+        Ok(Self {
+            config,
+            all_files_at_creation_time: original_filenames,
+            mapping,
+        })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.mapping.is_empty()
+    }
+
+    /// Ensure that the files have not changed since this request was created
+    fn ensure_files_did_not_change(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.all_files_at_creation_time == self.config.file_list(),
+            "The files in the directory changed while you were editing them."
+        );
+        Ok(())
     }
 }
 
-/// Prompt the user for confirmation
-fn prompt_for_confirmation(human_readable_mapping: String) -> bool {
-    println!("{}", human_readable_mapping);
-    let input = rprompt::prompt_reply("\nRename: [Y/n]? ").unwrap();
-    matches!(input.to_lowercase().as_str(), "y" | "")
+struct TempFileEditor {
+    editor_name: String,
 }
 
-/// Edit the files in a temp file and return the modified content
-fn edit_files_in_temp_file(temp_file_content: String, editor_name: String) -> Result<String> {
-    let temp_file = write_editable_temp_file(temp_file_content)?;
-    let_user_edit_temp_file(&temp_file, editor_name)?;
-    read_temp_file(&temp_file)
+impl TempFileEditor {
+    /// Write the content of the temp file the user will edit
+    fn write_editable_temp_file(content: String) -> Result<NamedTempFile> {
+        let mut temp_file = NamedTempFile::new()?;
+        write!(temp_file, "{}", content)?;
+        Ok(temp_file)
+    }
+
+    /// Let the user edit the temp file
+    fn let_user_edit_temp_file(&self, temp_file: &NamedTempFile) -> Result<()> {
+        let temp_path = temp_file
+            .path()
+            .to_str()
+            .context("Failed to convert path to string")?;
+        let mut command = Command::new(&self.editor_name);
+        // VS code needs the --wait flag to wait for the user to close the editor
+        if self.editor_name == "code" {
+            command.arg("--wait");
+        }
+        let status = command.arg(temp_path).status()?;
+        anyhow::ensure!(status.success(), "Editor exited with an error");
+        Ok(())
+    }
+
+    /// Read the temp file the user edited and parse the content
+    fn read_temp_file(temp_file: &NamedTempFile) -> Result<String> {
+        let mut content = String::new();
+        File::open(temp_file.path())?.read_to_string(&mut content)?;
+        Ok(content)
+    }
+
+    fn edit(&self, content: String) -> Result<String> {
+        let temp_file = Self::write_editable_temp_file(content)?;
+        self.let_user_edit_temp_file(&temp_file)?;
+        Self::read_temp_file(&temp_file)
+    }
 }
 
 /// Bulk rename files according to the configuration
 /// `edit_function` and `prompt_function` are passed as parameters to allow for testing.
 fn bulk_rename(
     config: BumvConfiguration,
-    editor_name: String,
-    edit_function: fn(String, String) -> Result<String>,
-    prompt_function: Box<dyn FnOnce(String) -> bool>,
+    edit_function: impl Fn(String) -> Result<String>,
+    prompt_function: impl FnOnce(String) -> bool,
 ) -> Result<()> {
-    let files = read_files(&config)?;
-    let temp_file_content = create_editable_temp_file_content(&files);
-    let modified_temp_file_content = edit_function(temp_file_content, editor_name)?;
-    let new_files = parse_temp_file_content(modified_temp_file_content);
+    let request = RenamingRequest::try_new(config, edit_function)?;
 
-    let rename_mapping = create_rename_mapping(&files, &new_files)?;
+    let plan = RenamingPlan::try_new(request)?;
 
-    if !rename_mapping.is_empty() {
-        let human_readable_mapping = create_human_readable_rename_mapping(&rename_mapping);
+    if !plan.is_empty() {
+        let human_readable_mapping = plan.human_readable_rename_mapping();
         if prompt_function(human_readable_mapping) {
-            let current_files = read_files(&config)?;
-            match ensure_files_did_not_change(&files, &current_files) {
-                Ok(_) => {}
-                Err(e) => {
-                    println!("{}", e);
-                    return Err(e);
-                }
-            };
-            rename_files(&rename_mapping)?;
-            println!("Files renamed successfully.");
+            println!("{}", plan.execute()?);
         } else {
             println!("Aborted.")
         }
@@ -244,6 +240,14 @@ fn bulk_rename(
     }
     Ok(())
 }
+
+/// Prompt the user for confirmation
+fn prompt_for_confirmation(human_readable_mapping: String) -> bool {
+    println!("{}", human_readable_mapping);
+    let input: String = rprompt::prompt_reply("\nRename: [Y/n]? ").unwrap();
+    matches!(input.to_lowercase().as_str(), "y" | "")
+}
+
 fn main() -> Result<()> {
     let config = BumvConfiguration::from_args();
     let editor_var = std::env::var("EDITOR");
@@ -254,11 +258,12 @@ fn main() -> Result<()> {
         (false, Err(_)) => "code".to_string(),
     };
 
+    let editor = TempFileEditor { editor_name };
+
     bulk_rename(
         config,
-        editor_name,
-        edit_files_in_temp_file,
-        Box::new(prompt_for_confirmation),
+        move |content| editor.edit(content),
+        prompt_for_confirmation,
     )
 }
 

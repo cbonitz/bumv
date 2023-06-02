@@ -52,6 +52,60 @@ impl BumvConfiguration {
     }
 }
 
+struct RenamingPlan {
+    request: RenamingRequest,
+    steps: Vec<(PathBuf, PathBuf)>,
+}
+
+impl RenamingPlan {
+    fn try_new(request: RenamingRequest) -> Result<Self> {
+        for (old, new) in request.mapping.iter() {
+            if old.parent() != new.parent() {
+                anyhow::bail!(
+                    "Renaming directories and moving files to other directories is currently not supported.",
+                );
+            }
+        }
+
+        let steps = request.mapping.clone();
+
+        Ok(RenamingPlan { request, steps })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.request.is_empty()
+    }
+
+    /// Create a human readable representation of the rename mapping
+    fn human_readable_rename_mapping(&self) -> String {
+        self.steps
+            .iter()
+            .map(|(old, new)| format!("{} -> {}", old.to_string_lossy(), new.to_string_lossy()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn execute(&self) -> Result<String> {
+        self.request.ensure_files_did_not_change()?;
+        rename_files(&self.steps)?;
+        Ok("Files renamed successfully.".to_string())
+    }
+}
+
+/// Perform the actual renaming of the files
+fn rename_files(rename_mapping: &Vec<(PathBuf, PathBuf)>) -> Result<()> {
+    for (old, new) in rename_mapping {
+        if new.exists() {
+            anyhow::bail!(
+                "The file {} already exists. Aborting.",
+                new.to_string_lossy()
+            );
+        }
+        fs::rename(old, new)?;
+    }
+    Ok(())
+}
+
 /// Create the content of the temp file the user will edit
 fn create_editable_temp_file_content(files: &[PathBuf]) -> String {
     files
@@ -71,71 +125,6 @@ fn parse_temp_file_content(content: String) -> Vec<PathBuf> {
         .collect()
 }
 
-struct RenamingPlan {
-    request: RenamingRequest,
-    steps: Vec<(PathBuf, PathBuf)>,
-}
-
-impl RenamingPlan {
-    fn try_new(request: RenamingRequest) -> Result<Self> {
-        for (old, new) in request.mapping.iter() {
-            if old.parent() != new.parent() {
-                anyhow::bail!(
-                    "Renaming directories and moving files to other directories is currently not supported.",
-                );
-            }
-        }
-        let steps: Vec<(PathBuf, PathBuf)> = request
-            .mapping
-            .iter()
-            .map(|(f, t)| (f.clone(), t.clone()))
-            .collect();
-
-        Ok(RenamingPlan { request, steps })
-    }
-
-    fn is_empty(&self) -> bool {
-        self.request.is_empty()
-    }
-
-    /// Create a human readable representation of the rename mapping
-    fn human_readable_rename_mapping(&self) -> String {
-        self.steps
-            .iter()
-            .map(|(old, new)| format!("{} -> {}", old.to_string_lossy(), new.to_string_lossy()))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    fn execute(&self) -> Result<()> {
-        self.request.ensure_files_did_not_change()?;
-        rename_files(&self.steps)?;
-        println!("Files renamed successfully.");
-        Ok(())
-    }
-}
-
-/// Perform the actual renaming of the files
-fn rename_files(rename_mapping: &Vec<(PathBuf, PathBuf)>) -> Result<()> {
-    for (old, new) in rename_mapping {
-        if new.exists() {
-            anyhow::bail!(
-                "The file {} already exists. Aborting.",
-                new.to_string_lossy()
-            );
-        }
-        fs::rename(old, new)?;
-    }
-    Ok(())
-}
-
-/// Prompt the user for confirmation
-fn prompt_for_confirmation(human_readable_mapping: String) -> bool {
-    println!("{}", human_readable_mapping);
-    let input: String = rprompt::prompt_reply("\nRename: [Y/n]? ").unwrap();
-    matches!(input.to_lowercase().as_str(), "y" | "")
-}
-
 struct RenamingRequest {
     config: BumvConfiguration,
     all_files_at_creation_time: Vec<PathBuf>,
@@ -143,37 +132,37 @@ struct RenamingRequest {
 }
 
 impl RenamingRequest {
-    fn try_new(
+    fn try_new<F: FnOnce(String) -> Result<String>>(
         config: BumvConfiguration,
-        edit_function: impl Fn(String) -> Result<String>,
+        edit_function: F,
     ) -> Result<Self> {
-        let from = config.file_list();
-        let temp_file_content = create_editable_temp_file_content(&from);
+        let original_filenames = config.file_list();
+        let temp_file_content = create_editable_temp_file_content(&original_filenames);
         let modified_temp_file_content = edit_function(temp_file_content)?;
-        let to = parse_temp_file_content(modified_temp_file_content);
-        if from.len() != to.len() {
+        let edited_filenames = parse_temp_file_content(modified_temp_file_content);
+        if original_filenames.len() != edited_filenames.len() {
             anyhow::bail!("The number of files in the edited file does not match the original.");
         }
-        let unique_new_files: HashSet<&PathBuf> = to.iter().collect();
-        if unique_new_files.len() != to.len() {
+        let unique_new_filenames: HashSet<&PathBuf> = edited_filenames.iter().collect();
+        if unique_new_filenames.len() != edited_filenames.len() {
             anyhow::bail!("There is a name clash in the edited files.");
         }
 
-        let mapping: Vec<(PathBuf, PathBuf)> = from
+        let mapping: Vec<(PathBuf, PathBuf)> = original_filenames
             .iter()
-            .zip(to.iter())
+            .zip(edited_filenames.iter())
             .filter(|(old, new)| old != new)
             .map(|(old, new)| (old.clone(), new.clone()))
             .collect();
         Ok(Self {
             config,
-            all_files_at_creation_time: from,
+            all_files_at_creation_time: original_filenames,
             mapping,
         })
     }
 
     fn is_empty(&self) -> bool {
-        return self.mapping.is_empty();
+        self.mapping.is_empty()
     }
 
     /// Ensure that the files have not changed since this request was created
@@ -204,12 +193,12 @@ impl TempFileEditor {
             .path()
             .to_str()
             .context("Failed to convert path to string")?;
-        let mut command = Command::new(self.editor_name.clone());
+        let mut command = Command::new(&self.editor_name);
         // VS code needs the --wait flag to wait for the user to close the editor
         if self.editor_name == "code" {
             command.arg("--wait");
         }
-        let status = command.arg(temp_path).status().unwrap();
+        let status = command.arg(temp_path).status()?;
         anyhow::ensure!(status.success(), "Editor exited with an error");
         Ok(())
     }
@@ -233,7 +222,7 @@ impl TempFileEditor {
 fn bulk_rename(
     config: BumvConfiguration,
     edit_function: impl Fn(String) -> Result<String>,
-    prompt_function: Box<dyn FnOnce(String) -> bool>,
+    prompt_function: impl FnOnce(String) -> bool,
 ) -> Result<()> {
     let request = RenamingRequest::try_new(config, edit_function)?;
 
@@ -242,7 +231,7 @@ fn bulk_rename(
     if !plan.is_empty() {
         let human_readable_mapping = plan.human_readable_rename_mapping();
         if prompt_function(human_readable_mapping) {
-            plan.execute()?;
+            println!("{}", plan.execute()?);
         } else {
             println!("Aborted.")
         }
@@ -251,6 +240,14 @@ fn bulk_rename(
     }
     Ok(())
 }
+
+/// Prompt the user for confirmation
+fn prompt_for_confirmation(human_readable_mapping: String) -> bool {
+    println!("{}", human_readable_mapping);
+    let input: String = rprompt::prompt_reply("\nRename: [Y/n]? ").unwrap();
+    matches!(input.to_lowercase().as_str(), "y" | "")
+}
+
 fn main() -> Result<()> {
     let config = BumvConfiguration::from_args();
     let editor_var = std::env::var("EDITOR");
@@ -266,7 +263,7 @@ fn main() -> Result<()> {
     bulk_rename(
         config,
         move |content| editor.edit(content),
-        Box::new(prompt_for_confirmation),
+        prompt_for_confirmation,
     )
 }
 

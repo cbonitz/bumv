@@ -171,7 +171,7 @@ fn scenario_test_rename_files() {
     bulk_rename(
         config,
         |content| Ok(content.replace("file1.txt", "renamed_file1.txt")),
-        Box::new(move |prompt| {
+        Box::new(move |prompt: String| {
             let (from, to) = prompt.split_once(" -> ").unwrap();
             // assertions take into account temp dir prefixes
             assert!(from.ends_with("file1.txt"));
@@ -230,7 +230,7 @@ fn scenario_test_rename_files_recursive() {
                 .replace("file1.txt", "renamed_file1.txt")
                 .replace("/subdir/file3.txt", "/subdir/renamed_file3.txt"))
         },
-        Box::new(move |prompt| {
+        Box::new(move |prompt: String| {
             let (rename_prompt_1, rename_prompt_2) = prompt.split_once('\n').unwrap();
             let (from, to) = rename_prompt_1.split_once(" -> ").unwrap();
             // assertions take into account temp dir prefixes

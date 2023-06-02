@@ -30,47 +30,26 @@ struct BumvConfiguration {
 }
 
 impl BumvConfiguration {
-    fn file_list(&self) -> Result<Vec<PathBuf>> {
+    fn file_list(&self) -> Vec<PathBuf> {
         let base_path = self.base_path.as_deref().unwrap_or_else(|| Path::new("."));
-        if self.recursive {
-            read_directory_files_recursive(base_path, self.no_ignore)
+        let builder = WalkBuilder::new(base_path)
+            .standard_filters(!self.no_ignore)
+            .build()
+            .filter_map(Result::ok)
+            .map(|entry| entry.into_path())
+            .filter(|path| path.is_file());
+        let mut result: Vec<_> = if !self.recursive {
+            // non-recursive mode: only include files in the base path
+            builder
+                .filter(|path| path.parent() == Some(base_path))
+                .collect()
         } else {
-            read_directory_files(base_path, self.no_ignore)
-        }
+            builder.collect()
+        };
+        // ensure deterministic order
+        result.sort_by_key(|path| path.to_string_lossy().to_string());
+        result
     }
-}
-
-/// Deterministically sort paths
-fn sort_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
-    paths.sort_by_key(|path| path.to_string_lossy().to_string());
-    paths
-}
-
-/// Read the files in `base_path` non-recursively, optionally ignoring ignore files
-fn read_directory_files(base_path: &Path, no_ignore_files: bool) -> Result<Vec<PathBuf>> {
-    Ok(sort_paths(
-        WalkBuilder::new(base_path)
-            .standard_filters(!no_ignore_files)
-            .build()
-            .filter_map(Result::ok)
-            .map(|entry| entry.into_path())
-            .filter(|path| path.is_file())
-            .filter(|path| path.parent() == Some(base_path))
-            .collect(),
-    ))
-}
-
-/// read the files in `base_path` recursively, optionally ignoring ignore files
-fn read_directory_files_recursive(base_path: &Path, no_ignore_files: bool) -> Result<Vec<PathBuf>> {
-    Ok(sort_paths(
-        WalkBuilder::new(base_path)
-            .standard_filters(!no_ignore_files)
-            .build()
-            .filter_map(Result::ok)
-            .map(|entry| entry.into_path())
-            .filter(|path| path.is_file())
-            .collect(),
-    ))
 }
 
 /// Create the content of the temp file the user will edit
@@ -206,7 +185,7 @@ impl RenamingRequest {
         editor_name: String,
         edit_function: fn(String, String) -> Result<String>,
     ) -> Result<Self> {
-        let from = config.file_list()?;
+        let from = config.file_list();
         let temp_file_content = create_editable_temp_file_content(&from);
         let modified_temp_file_content = edit_function(temp_file_content, editor_name)?;
         let to = parse_temp_file_content(modified_temp_file_content);
@@ -238,7 +217,7 @@ impl RenamingRequest {
     /// Ensure that the files have not changed since this request was created
     fn ensure_files_did_not_change(&self) -> Result<()> {
         anyhow::ensure!(
-            self.all_files_at_creation_time == self.config.file_list()?,
+            self.all_files_at_creation_time == self.config.file_list(),
             "The files in the directory changed while you were editing them."
         );
         Ok(())

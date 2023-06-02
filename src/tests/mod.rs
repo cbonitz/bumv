@@ -1,7 +1,4 @@
-use crate::{
-    bulk_rename, create_editable_temp_file_content, read_directory_files,
-    read_directory_files_recursive, BumvConfiguration,
-};
+use crate::{bulk_rename, create_editable_temp_file_content, BumvConfiguration};
 use std::{cell::RefCell, fs::File, io::Write, rc::Rc};
 use tempfile::{tempdir, TempDir};
 
@@ -43,7 +40,13 @@ fn test_read_directory_files_nonrecursive() {
     let dir = tempdir().unwrap();
     create_test_files(&dir);
 
-    let files = read_directory_files(dir.path(), false).unwrap();
+    let files = BumvConfiguration {
+        recursive: false,
+        no_ignore: false,
+        use_vscode: false,
+        base_path: Some(dir.into_path()),
+    }
+    .file_list();
 
     assert_eq!(files.len(), 2);
     assert_eq!(files[0].file_name().unwrap(), "file1.txt");
@@ -56,7 +59,13 @@ fn test_read_directory_files_nonrecursive_no_ignore() {
     let dir = tempdir().unwrap();
     create_test_files(&dir);
 
-    let files = read_directory_files(dir.path(), true).unwrap();
+    let files = BumvConfiguration {
+        recursive: false,
+        no_ignore: true,
+        use_vscode: false,
+        base_path: Some(dir.into_path()),
+    }
+    .file_list();
 
     assert_eq!(files.len(), 4);
     assert_eq!(files[0].file_name().unwrap(), ".ignore");
@@ -71,7 +80,13 @@ fn test_read_directory_files_recursive() {
     let dir = tempdir().unwrap();
     create_test_files(&dir);
 
-    let files = read_directory_files_recursive(dir.path(), false).unwrap();
+    let files = BumvConfiguration {
+        recursive: true,
+        no_ignore: false,
+        use_vscode: false,
+        base_path: Some(dir.into_path()),
+    }
+    .file_list();
 
     assert_eq!(files.len(), 4);
     // assertions take into account temp dir prefixes
@@ -87,7 +102,13 @@ fn test_read_directory_files_recursive_no_ignore() {
     let dir = tempdir().unwrap();
     create_test_files(&dir);
 
-    let files = read_directory_files_recursive(dir.path(), true).unwrap();
+    let files = BumvConfiguration {
+        recursive: true,
+        no_ignore: true,
+        use_vscode: false,
+        base_path: Some(dir.into_path()),
+    }
+    .file_list();
 
     assert_eq!(files.len(), 6);
     // assertions take into account temp dir prefixes
@@ -104,7 +125,14 @@ fn test_read_directory_files_recursive_no_ignore() {
 fn test_create_temp_file_content() {
     let dir = tempdir().unwrap();
     create_test_files(&dir);
-    let files = read_directory_files_recursive(dir.path(), false).unwrap();
+
+    let files = BumvConfiguration {
+        recursive: true,
+        no_ignore: false,
+        use_vscode: false,
+        base_path: Some(dir.into_path()),
+    }
+    .file_list();
 
     let content = create_editable_temp_file_content(&files);
 

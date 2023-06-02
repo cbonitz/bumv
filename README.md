@@ -39,16 +39,17 @@ The following safety checks are implemented and tested:
 - To avoid overwriting existing of files due to race conditions or renaming order, `bumv` verifies before each renaming operation that a file with the target filename does not exist.
 - Before renaming is performed, `bumv` verifies that the file list presented to the user still exactly matches what is present on the file system.
 
+### Notes
+
+- If a part of the parent directory hierarchy of a file is changed when editing the mapping, the file will be moved to the specified location, but empty directories will not be deleted.
+- If a renaming would lead to a conflict if done naively, e.g. `file1 <-> file2`, a temporary file will be used to enable the renaming.
+
 ### Options
 
 ```
 -n, --no-ignore    Do not observe ignore files
 -r, --recursive    Recursively rename files in subdirectories
 ```
-
-### Non-Features
-
-While `bumv` can edit files in subdirectories with the `--recursive` option, renaming of directories or moving files across directories is not implemented at this point.
 
 ## Installation
 

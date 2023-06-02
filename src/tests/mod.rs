@@ -1,9 +1,16 @@
-use crate::{
-    bulk_rename, create_editable_temp_file_content, ensure_files_did_not_change,
-    read_directory_files, read_directory_files_recursive, BumvConfiguration,
+use crate::{bulk_rename, create_editable_temp_file_content, BumvConfiguration};
+use std::{
+    cell::RefCell,
+    fs::{self, File},
+    io::Write,
+    rc::Rc,
 };
-use std::{cell::RefCell, fs::File, io::Write, rc::Rc};
 use tempfile::{tempdir, TempDir};
+
+fn prompt_function(prompt: String) -> bool {
+    println!("prompt:\n{}", prompt);
+    true
+}
 
 fn create_test_files(dir: &tempfile::TempDir) {
     let ignore = dir.path().join(".ignore");
@@ -21,14 +28,17 @@ fn create_test_files(dir: &tempfile::TempDir) {
         .write_all("ignored.txt\nalso_ignored.txt".as_bytes())
         .unwrap();
     ignore.flush().unwrap();
-    File::create(file1).unwrap();
-    File::create(file2).unwrap();
+    let mut file1 = File::create(file1).unwrap();
+    write!(file1, "file1_content").unwrap();
+    let mut file2 = File::create(file2).unwrap();
+    write!(file2, "file2_content").unwrap();
     File::create(ignored).unwrap();
-    File::create(file3).unwrap();
+    let mut file3 = File::create(file3).unwrap();
+    write!(file3, "file3_content").unwrap();
     File::create(file4).unwrap();
 }
 
-fn assert_no_files_changed(dir: &TempDir) {
+fn assert_no_filenames_changed(dir: &TempDir) {
     assert!(dir.path().join(".ignore").exists());
     assert!(dir.path().join("file1.txt").exists());
     assert!(dir.path().join("file2.txt").exists());
@@ -43,7 +53,13 @@ fn test_read_directory_files_nonrecursive() {
     let dir = tempdir().unwrap();
     create_test_files(&dir);
 
-    let files = read_directory_files(dir.path(), false).unwrap();
+    let files = BumvConfiguration {
+        recursive: false,
+        no_ignore: false,
+        use_vscode: false,
+        base_path: Some(dir.into_path()),
+    }
+    .file_list();
 
     assert_eq!(files.len(), 2);
     assert_eq!(files[0].file_name().unwrap(), "file1.txt");
@@ -56,7 +72,13 @@ fn test_read_directory_files_nonrecursive_no_ignore() {
     let dir = tempdir().unwrap();
     create_test_files(&dir);
 
-    let files = read_directory_files(dir.path(), true).unwrap();
+    let files = BumvConfiguration {
+        recursive: false,
+        no_ignore: true,
+        use_vscode: false,
+        base_path: Some(dir.into_path()),
+    }
+    .file_list();
 
     assert_eq!(files.len(), 4);
     assert_eq!(files[0].file_name().unwrap(), ".ignore");
@@ -71,7 +93,13 @@ fn test_read_directory_files_recursive() {
     let dir = tempdir().unwrap();
     create_test_files(&dir);
 
-    let files = read_directory_files_recursive(dir.path(), false).unwrap();
+    let files = BumvConfiguration {
+        recursive: true,
+        no_ignore: false,
+        use_vscode: false,
+        base_path: Some(dir.into_path()),
+    }
+    .file_list();
 
     assert_eq!(files.len(), 4);
     // assertions take into account temp dir prefixes
@@ -87,7 +115,13 @@ fn test_read_directory_files_recursive_no_ignore() {
     let dir = tempdir().unwrap();
     create_test_files(&dir);
 
-    let files = read_directory_files_recursive(dir.path(), true).unwrap();
+    let files = BumvConfiguration {
+        recursive: true,
+        no_ignore: true,
+        use_vscode: false,
+        base_path: Some(dir.into_path()),
+    }
+    .file_list();
 
     assert_eq!(files.len(), 6);
     // assertions take into account temp dir prefixes
@@ -104,7 +138,14 @@ fn test_read_directory_files_recursive_no_ignore() {
 fn test_create_temp_file_content() {
     let dir = tempdir().unwrap();
     create_test_files(&dir);
-    let files = read_directory_files_recursive(dir.path(), false).unwrap();
+
+    let files = BumvConfiguration {
+        recursive: true,
+        no_ignore: false,
+        use_vscode: false,
+        base_path: Some(dir.into_path()),
+    }
+    .file_list();
 
     let content = create_editable_temp_file_content(&files);
 
@@ -114,33 +155,6 @@ fn test_create_temp_file_content() {
     assert!(lines[1].ends_with("/file2.txt"));
     assert!(lines[2].ends_with("/subdir/file3.txt"));
     assert!(lines[3].ends_with("/subdir/file4.txt"));
-}
-
-/// Test the file change check
-#[test]
-fn test_ensure_files_did_not_change_no_changes() {
-    let dir = tempdir().unwrap();
-    create_test_files(&dir);
-    let previous_files = read_directory_files_recursive(dir.path(), false).unwrap();
-    let mut current_files = previous_files.clone();
-
-    assert!(ensure_files_did_not_change(&previous_files, &current_files).is_ok());
-
-    current_files.pop();
-
-    assert!(ensure_files_did_not_change(&previous_files, &current_files).is_err());
-}
-
-/// Test the file change check with changes
-#[test]
-fn test_ensure_files_did_not_change() {
-    let dir = tempdir().unwrap();
-    create_test_files(&dir);
-    let files = read_directory_files_recursive(dir.path(), false).unwrap();
-    let mut changed_files = files.clone();
-    changed_files.pop();
-
-    assert!(ensure_files_did_not_change(&files, &changed_files).is_err())
 }
 
 /// Validate renaming a file in the current directory
@@ -169,9 +183,9 @@ fn scenario_test_rename_files() {
 
     bulk_rename(
         config,
-        "whatever".to_string(),
-        |content, _| Ok(content.replace("file1.txt", "renamed_file1.txt")),
-        Box::new(move |prompt| {
+        |content| Ok(content.replace("file1.txt", "renamed_file1.txt")),
+        Box::new(move |prompt: String| {
+            println!("prompt:\n{}", prompt);
             let (from, to) = prompt.split_once(" -> ").unwrap();
             // assertions take into account temp dir prefixes
             assert!(from.ends_with("file1.txt"));
@@ -186,6 +200,7 @@ fn scenario_test_rename_files() {
 
     // verify renaming
     assert!(dir.path().join(".ignore").exists());
+    // file1.txt -> renamed_file2.txt
     assert!(!dir.path().join("file1.txt").exists());
     assert!(dir.path().join("renamed_file1.txt").exists());
     assert!(dir.path().join("file2.txt").exists());
@@ -225,14 +240,23 @@ fn scenario_test_rename_files_recursive() {
 
     bulk_rename(
         config,
-        "whatever".to_string(),
-        |content, _| {
+        |content| {
             Ok(content
                 .replace("file1.txt", "renamed_file1.txt")
                 .replace("/subdir/file3.txt", "/subdir/renamed_file3.txt"))
         },
-        Box::new(move |prompt| {
-            let (rename_prompt_1, rename_prompt_2) = prompt.split_once('\n').unwrap();
+        Box::new(move |prompt: String| {
+            println!("prompt:\n{}", prompt);
+            // make test robust to unstable topological sort
+            let (rename_prompt_1, rename_prompt_2) = {
+                let (rename_prompt_a, rename_prompt_b) = prompt.split_once('\n').unwrap();
+                if rename_prompt_a.contains("renamed_file1") {
+                    (rename_prompt_a, rename_prompt_b)
+                } else {
+                    (rename_prompt_b, rename_prompt_a)
+                }
+            };
+
             let (from, to) = rename_prompt_1.split_once(" -> ").unwrap();
             // assertions take into account temp dir prefixes
             assert!(from.ends_with("file1.txt"));
@@ -273,9 +297,8 @@ fn scenario_test_detect_duplicate_target_names() {
 
     let err = bulk_rename(
         config,
-        "whatever".to_string(),
-        |content, _| Ok(content.replace("file1.txt", "file2.txt")),
-        Box::new(move |_| true),
+        |content| Ok(content.replace("file1.txt", "file2.txt")),
+        Box::new(prompt_function),
     )
     .unwrap_err();
 
@@ -283,7 +306,7 @@ fn scenario_test_detect_duplicate_target_names() {
         err.to_string(),
         "There is a name clash in the edited files."
     );
-    assert_no_files_changed(&dir);
+    assert_no_filenames_changed(&dir);
 }
 
 /// Verify detection of invalid editing (nubmer of lines changed)
@@ -300,19 +323,19 @@ fn scenario_test_detect_invalid_editing() {
 
     let err = bulk_rename(
         config,
-        "whatever".to_string(),
-        |_, __| Ok("file1".to_string()),
-        Box::new(move |_| true),
+        |_| Ok("file1".to_string()),
+        Box::new(prompt_function),
     )
     .unwrap_err();
     assert_eq!(
         err.to_string(),
         "The number of files in the edited file does not match the original."
     );
-    assert_no_files_changed(&dir);
+    assert_no_filenames_changed(&dir);
 }
 
-/// Verify detection of directory renaming (not supported at this time)
+/// Verify "directory renaming", i.e. creation of new parent directories
+/// Old parent dirs are left empty
 #[test]
 fn scenario_test_detect_directory_renaming() {
     let dir = tempdir().unwrap();
@@ -324,18 +347,25 @@ fn scenario_test_detect_directory_renaming() {
         base_path: Some(dir.path().to_path_buf()),
     };
 
-    let err = bulk_rename(
+    bulk_rename(
         config,
-        "whatever".to_string(),
-        |content, _| Ok(content.replace("subdir", "superdir")),
-        Box::new(|_| true),
+        |content| Ok(content.replace("subdir", "superdir")),
+        Box::new(prompt_function),
     )
-    .unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "Renaming directories and moving files to other directories is currently not supported."
-    );
-    assert_no_files_changed(&dir);
+    .unwrap();
+
+    assert!(dir.path().join(".ignore").exists());
+    assert!(dir.path().join("file1.txt").exists());
+    assert!(dir.path().join("file2.txt").exists());
+    assert!(dir.path().join("ignored.txt").exists());
+    // files moved from subdir to new superdir
+    assert!(!dir.path().join("subdir").join("file3.txt").exists());
+    assert!(!dir.path().join("subdir").join("file4.txt").exists());
+    assert!(dir.path().join("superdir").join("file3.txt").exists());
+    assert!(dir.path().join("superdir").join("file4.txt").exists());
+    // old directory remains
+    assert!(dir.path().join("subdir").exists());
+    assert!(dir.path().join("subdir").exists());
 }
 
 /// Verify detection of a new file appearing in the directory while the program is running
@@ -353,10 +383,10 @@ fn scenario_test_detect_changed_files() {
 
     let err = bulk_rename(
         config,
-        "whatever".to_string(),
-        |content, _| Ok(content.replace("file1.txt", "renamed_file1.txt")),
-        Box::new(move |_| {
-            // simulate file creation at possible moment
+        |content| Ok(content.replace("file1.txt", "renamed_file1.txt")),
+        Box::new(move |prompt| {
+            println!("prompt:\n{}", prompt);
+            // simulate file creation at the worst possible moment
             File::create(path.join("renamed_file1.txt")).unwrap();
             true
         }),
@@ -367,7 +397,7 @@ fn scenario_test_detect_changed_files() {
         err.to_string(),
         "The files in the directory changed while you were editing them."
     );
-    assert_no_files_changed(&dir);
+    assert_no_filenames_changed(&dir);
 }
 
 /// Verify prevention of overwring a file that is not part of the listing (e.g. due to an .ignore file)
@@ -384,14 +414,13 @@ fn scenario_test_detect_overwrite_of_file_not_part_of_listing() {
 
     let err = bulk_rename(
         config,
-        "whatever".to_string(),
-        |content, _| Ok(content.replace("file1.txt", "ignored.txt")),
-        Box::new(|_| true),
+        |content| Ok(content.replace("file1.txt", "ignored.txt")),
+        Box::new(prompt_function),
     )
     .unwrap_err();
 
     assert!(err.to_string().contains("ignored.txt already exists"));
-    assert_no_files_changed(&dir);
+    assert_no_filenames_changed(&dir);
 }
 
 /// Verify prevention of overwring a file that is created during editing and would not be
@@ -410,10 +439,10 @@ fn scenario_test_detect_overwrite_of_new_file_not_part_of_listing() {
 
     let err = bulk_rename(
         config,
-        "whatever".to_string(),
-        |content, _| Ok(content.replace("file1.txt", "also_ignored.txt")),
-        Box::new(move |_| {
-            // simulate file creation at possible moment
+        |content| Ok(content.replace("file1.txt", "also_ignored.txt")),
+        Box::new(move |prompt| {
+            println!("prompt:\n{}", prompt);
+            // simulate file creation at the worst possible moment
             File::create(path.join("also_ignored.txt")).unwrap();
             true
         }),
@@ -423,9 +452,9 @@ fn scenario_test_detect_overwrite_of_new_file_not_part_of_listing() {
     assert!(err.to_string().contains("also_ignored.txt already exists"));
 }
 
-/// Verify prevention of overwring a file due to renaming order
+/// Verify that renaming order is fixed
 #[test]
-fn scenario_test_detect_overwrite_due_to_renaming_order() {
+fn scenario_test_detect_fix_renaming_order() {
     let dir = tempdir().unwrap();
     create_test_files(&dir);
     let config = BumvConfiguration {
@@ -435,21 +464,106 @@ fn scenario_test_detect_overwrite_due_to_renaming_order() {
         base_path: Some(dir.path().to_path_buf()),
     };
 
-    let err = bulk_rename(
+    bulk_rename(
         config,
-        "whatever".to_string(),
-        |content, _| {
-            // results in illegal renaming order
-            // file1.txt -> file2.tx
-            // file2.txt -> file3.txt
+        |content| {
             Ok(content
                 .replace("file2.txt", "file3.txt")
                 .replace("file1.txt", "file2.txt"))
         },
-        Box::new(|_| true),
+        Box::new(prompt_function),
     )
-    .unwrap_err();
+    .unwrap();
 
-    assert!(err.to_string().contains("file2.txt already exists"));
-    assert_no_files_changed(&dir);
+    assert!(dir.path().join(".ignore").exists());
+    // file1.txt -> file2.txt
+    assert!(!dir.path().join("file1.txt").exists());
+    assert!(dir.path().join("file2.txt").exists());
+    let new_content_file2 = fs::read_to_string(dir.path().join("file2.txt")).unwrap();
+    assert_eq!(new_content_file2, "file1_content");
+    // file2.txt -> file3.txt
+    assert!(dir.path().join("file3.txt").exists());
+    let new_content_file3 = fs::read_to_string(dir.path().join("file3.txt")).unwrap();
+    assert_eq!(new_content_file3, "file2_content");
+    assert!(dir.path().join("ignored.txt").exists());
+    assert!(dir.path().join("subdir").join("file3.txt").exists());
+    assert!(dir.path().join("subdir").join("file4.txt").exists());
+}
+
+#[test]
+fn direct_cycle_test() {
+    let dir = tempdir().unwrap();
+    create_test_files(&dir);
+
+    let config = BumvConfiguration {
+        recursive: false,
+        no_ignore: false,
+        use_vscode: false,
+        base_path: Some(dir.path().to_path_buf()),
+    };
+
+    // Create a direct cycle: file1.txt -> file2.txt, file2.txt -> file1.txt
+    let _ = bulk_rename(
+        config,
+        |content| {
+            Ok({
+                let result = content
+                    .replace("file1.txt", "some_temporary_string")
+                    .replace("file2.txt", "file1.txt")
+                    .replace("some_temporary_string", "file2.txt");
+                dbg!(content, &result);
+                result
+            })
+        },
+        Box::new(prompt_function),
+    )
+    .unwrap();
+
+    assert_no_filenames_changed(&dir);
+    // Check the file content after renaming
+    let new_content_file1 = fs::read_to_string(dir.path().join("file1.txt")).unwrap();
+    let new_contents_file2 = fs::read_to_string(dir.path().join("file2.txt")).unwrap();
+    assert_eq!(new_content_file1, "file2_content");
+    assert_eq!(new_contents_file2, "file1_content");
+}
+
+#[test]
+fn longer_cycle_test() {
+    let dir = tempdir().unwrap();
+    create_test_files(&dir);
+
+    let config = BumvConfiguration {
+        recursive: true,
+        no_ignore: false,
+        use_vscode: false,
+        base_path: Some(dir.path().to_path_buf()),
+    };
+
+    // Create a longer cycle: file1.txt -> file2.txt, file2.txt -> file3.txt, file3.txt -> file1.txt
+    let _ = bulk_rename(
+        config,
+        |content| {
+            Ok({
+                let result = content
+                    .replace("file1.txt", "some_temporary_string")
+                    .replace("subdir/file3.txt", "file1.txt")
+                    .replace("file2.txt", "subdir/file3.txt")
+                    .replace("some_temporary_string", "file2.txt");
+                dbg!(content, &result);
+                result
+            })
+        },
+        Box::new(prompt_function),
+    )
+    .unwrap();
+
+    assert_no_filenames_changed(&dir);
+    // Check the file content after renaming
+    let new_content_file1 = fs::read_to_string(dir.path().join("file1.txt")).unwrap();
+    let new_content_file2 = fs::read_to_string(dir.path().join("file2.txt")).unwrap();
+    let new_content_file3 =
+        fs::read_to_string(dir.path().join("subdir").join("file3.txt")).unwrap();
+    assert_eq!(new_content_file1, "file3_content");
+    assert_eq!(new_content_file2, "file1_content");
+    assert_eq!(new_content_file3, "file2_content");
 }

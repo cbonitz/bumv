@@ -1,6 +1,6 @@
 use crate::{
-    bulk_rename, create_editable_temp_file_content, ensure_files_did_not_change,
-    read_directory_files, read_directory_files_recursive, BumvConfiguration,
+    bulk_rename, create_editable_temp_file_content, read_directory_files,
+    read_directory_files_recursive, BumvConfiguration,
 };
 use std::{cell::RefCell, fs::File, io::Write, rc::Rc};
 use tempfile::{tempdir, TempDir};
@@ -114,33 +114,6 @@ fn test_create_temp_file_content() {
     assert!(lines[1].ends_with("/file2.txt"));
     assert!(lines[2].ends_with("/subdir/file3.txt"));
     assert!(lines[3].ends_with("/subdir/file4.txt"));
-}
-
-/// Test the file change check
-#[test]
-fn test_ensure_files_did_not_change_no_changes() {
-    let dir = tempdir().unwrap();
-    create_test_files(&dir);
-    let previous_files = read_directory_files_recursive(dir.path(), false).unwrap();
-    let mut current_files = previous_files.clone();
-
-    assert!(ensure_files_did_not_change(&previous_files, &current_files).is_ok());
-
-    current_files.pop();
-
-    assert!(ensure_files_did_not_change(&previous_files, &current_files).is_err());
-}
-
-/// Test the file change check with changes
-#[test]
-fn test_ensure_files_did_not_change() {
-    let dir = tempdir().unwrap();
-    create_test_files(&dir);
-    let files = read_directory_files_recursive(dir.path(), false).unwrap();
-    let mut changed_files = files.clone();
-    changed_files.pop();
-
-    assert!(ensure_files_did_not_change(&files, &changed_files).is_err())
 }
 
 /// Validate renaming a file in the current directory

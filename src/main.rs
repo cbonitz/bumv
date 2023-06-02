@@ -61,36 +61,6 @@ fn create_editable_temp_file_content(files: &[PathBuf]) -> String {
         .join("\n")
 }
 
-/// Write the content of the temp file the user will edit
-fn write_editable_temp_file(content: String) -> Result<NamedTempFile> {
-    let mut temp_file = NamedTempFile::new()?;
-    write!(temp_file, "{}", content)?;
-    Ok(temp_file)
-}
-
-/// Let the user edit the temp file
-fn let_user_edit_temp_file(temp_file: &NamedTempFile, editor_name: String) -> Result<()> {
-    let temp_path = temp_file
-        .path()
-        .to_str()
-        .context("Failed to convert path to string")?;
-    let mut command = Command::new(editor_name.clone());
-    // VS code needs the --wait flag to wait for the user to close the editor
-    if editor_name == "code" {
-        command.arg("--wait");
-    }
-    let status = command.arg(temp_path).status().unwrap();
-    anyhow::ensure!(status.success(), "Editor exited with an error");
-    Ok(())
-}
-
-/// Read the temp file the user edited and parse the content
-fn read_temp_file(temp_file: &NamedTempFile) -> Result<String> {
-    let mut content = String::new();
-    File::open(temp_file.path())?.read_to_string(&mut content)?;
-    Ok(content)
-}
-
 /// Parse the content of the temp file the user edited
 fn parse_temp_file_content(content: String) -> Vec<PathBuf> {
     content
@@ -162,15 +132,8 @@ fn rename_files(rename_mapping: &Vec<(PathBuf, PathBuf)>) -> Result<()> {
 /// Prompt the user for confirmation
 fn prompt_for_confirmation(human_readable_mapping: String) -> bool {
     println!("{}", human_readable_mapping);
-    let input = rprompt::prompt_reply("\nRename: [Y/n]? ").unwrap();
+    let input: String = rprompt::prompt_reply("\nRename: [Y/n]? ").unwrap();
     matches!(input.to_lowercase().as_str(), "y" | "")
-}
-
-/// Edit the files in a temp file and return the modified content
-fn edit_files_in_temp_file(temp_file_content: String, editor_name: String) -> Result<String> {
-    let temp_file = write_editable_temp_file(temp_file_content)?;
-    let_user_edit_temp_file(&temp_file, editor_name)?;
-    read_temp_file(&temp_file)
 }
 
 struct RenamingRequest {
@@ -182,12 +145,11 @@ struct RenamingRequest {
 impl RenamingRequest {
     fn try_new(
         config: BumvConfiguration,
-        editor_name: String,
-        edit_function: fn(String, String) -> Result<String>,
+        edit_function: impl Fn(String) -> Result<String>,
     ) -> Result<Self> {
         let from = config.file_list();
         let temp_file_content = create_editable_temp_file_content(&from);
-        let modified_temp_file_content = edit_function(temp_file_content, editor_name)?;
+        let modified_temp_file_content = edit_function(temp_file_content)?;
         let to = parse_temp_file_content(modified_temp_file_content);
         if from.len() != to.len() {
             anyhow::bail!("The number of files in the edited file does not match the original.");
@@ -224,15 +186,56 @@ impl RenamingRequest {
     }
 }
 
+struct TempFileEditor {
+    editor_name: String,
+}
+
+impl TempFileEditor {
+    /// Write the content of the temp file the user will edit
+    fn write_editable_temp_file(content: String) -> Result<NamedTempFile> {
+        let mut temp_file = NamedTempFile::new()?;
+        write!(temp_file, "{}", content)?;
+        Ok(temp_file)
+    }
+
+    /// Let the user edit the temp file
+    fn let_user_edit_temp_file(&self, temp_file: &NamedTempFile) -> Result<()> {
+        let temp_path = temp_file
+            .path()
+            .to_str()
+            .context("Failed to convert path to string")?;
+        let mut command = Command::new(self.editor_name.clone());
+        // VS code needs the --wait flag to wait for the user to close the editor
+        if self.editor_name == "code" {
+            command.arg("--wait");
+        }
+        let status = command.arg(temp_path).status().unwrap();
+        anyhow::ensure!(status.success(), "Editor exited with an error");
+        Ok(())
+    }
+
+    /// Read the temp file the user edited and parse the content
+    fn read_temp_file(temp_file: &NamedTempFile) -> Result<String> {
+        let mut content = String::new();
+        File::open(temp_file.path())?.read_to_string(&mut content)?;
+        Ok(content)
+    }
+
+    fn edit(&self, content: String) -> Result<String> {
+        let temp_file = Self::write_editable_temp_file(content)?;
+        self.let_user_edit_temp_file(&temp_file)?;
+        Self::read_temp_file(&temp_file)
+    }
+}
+
 /// Bulk rename files according to the configuration
 /// `edit_function` and `prompt_function` are passed as parameters to allow for testing.
 fn bulk_rename(
     config: BumvConfiguration,
-    editor_name: String,
-    edit_function: fn(String, String) -> Result<String>,
+    edit_function: impl Fn(String) -> Result<String>,
     prompt_function: Box<dyn FnOnce(String) -> bool>,
 ) -> Result<()> {
-    let request = RenamingRequest::try_new(config, editor_name, edit_function)?;
+    let request = RenamingRequest::try_new(config, edit_function)?;
 
     let plan = RenamingPlan::try_new(request)?;
 
@@ -258,10 +261,11 @@ fn main() -> Result<()> {
         (false, Err(_)) => "code".to_string(),
     };
 
+    let editor = TempFileEditor { editor_name };
+
     bulk_rename(
         config,
-        editor_name,
-        edit_files_in_temp_file,
+        move |content| editor.edit(content),
         Box::new(prompt_for_confirmation),
     )
 }

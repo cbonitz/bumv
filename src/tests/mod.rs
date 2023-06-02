@@ -170,8 +170,7 @@ fn scenario_test_rename_files() {
 
     bulk_rename(
         config,
-        "whatever".to_string(),
-        |content, _| Ok(content.replace("file1.txt", "renamed_file1.txt")),
+        |content| Ok(content.replace("file1.txt", "renamed_file1.txt")),
         Box::new(move |prompt| {
             let (from, to) = prompt.split_once(" -> ").unwrap();
             // assertions take into account temp dir prefixes
@@ -226,8 +225,7 @@ fn scenario_test_rename_files_recursive() {
 
     bulk_rename(
         config,
-        "whatever".to_string(),
-        |content, _| {
+        |content| {
             Ok(content
                 .replace("file1.txt", "renamed_file1.txt")
                 .replace("/subdir/file3.txt", "/subdir/renamed_file3.txt"))
@@ -274,8 +272,7 @@ fn scenario_test_detect_duplicate_target_names() {
 
     let err = bulk_rename(
         config,
-        "whatever".to_string(),
-        |content, _| Ok(content.replace("file1.txt", "file2.txt")),
+        |content| Ok(content.replace("file1.txt", "file2.txt")),
         Box::new(move |_| true),
     )
     .unwrap_err();
@@ -299,13 +296,8 @@ fn scenario_test_detect_invalid_editing() {
         base_path: Some(dir.path().to_path_buf()),
     };
 
-    let err = bulk_rename(
-        config,
-        "whatever".to_string(),
-        |_, __| Ok("file1".to_string()),
-        Box::new(move |_| true),
-    )
-    .unwrap_err();
+    let err =
+        bulk_rename(config, |_| Ok("file1".to_string()), Box::new(move |_| true)).unwrap_err();
     assert_eq!(
         err.to_string(),
         "The number of files in the edited file does not match the original."
@@ -327,8 +319,7 @@ fn scenario_test_detect_directory_renaming() {
 
     let err = bulk_rename(
         config,
-        "whatever".to_string(),
-        |content, _| Ok(content.replace("subdir", "superdir")),
+        |content| Ok(content.replace("subdir", "superdir")),
         Box::new(|_| true),
     )
     .unwrap_err();
@@ -354,8 +345,7 @@ fn scenario_test_detect_changed_files() {
 
     let err = bulk_rename(
         config,
-        "whatever".to_string(),
-        |content, _| Ok(content.replace("file1.txt", "renamed_file1.txt")),
+        |content| Ok(content.replace("file1.txt", "renamed_file1.txt")),
         Box::new(move |_| {
             // simulate file creation at possible moment
             File::create(path.join("renamed_file1.txt")).unwrap();
@@ -385,8 +375,7 @@ fn scenario_test_detect_overwrite_of_file_not_part_of_listing() {
 
     let err = bulk_rename(
         config,
-        "whatever".to_string(),
-        |content, _| Ok(content.replace("file1.txt", "ignored.txt")),
+        |content| Ok(content.replace("file1.txt", "ignored.txt")),
         Box::new(|_| true),
     )
     .unwrap_err();
@@ -411,8 +400,7 @@ fn scenario_test_detect_overwrite_of_new_file_not_part_of_listing() {
 
     let err = bulk_rename(
         config,
-        "whatever".to_string(),
-        |content, _| Ok(content.replace("file1.txt", "also_ignored.txt")),
+        |content| Ok(content.replace("file1.txt", "also_ignored.txt")),
         Box::new(move |_| {
             // simulate file creation at possible moment
             File::create(path.join("also_ignored.txt")).unwrap();
@@ -438,8 +426,7 @@ fn scenario_test_detect_overwrite_due_to_renaming_order() {
 
     let err = bulk_rename(
         config,
-        "whatever".to_string(),
-        |content, _| {
+        |content| {
             // results in illegal renaming order
             // file1.txt -> file2.tx
             // file2.txt -> file3.txt

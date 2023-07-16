@@ -1,7 +1,10 @@
 //! A bulk file renaming utility that uses your editor as its UI.
+
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
-use std::collections::HashSet;
+use petgraph::algo::toposort;
+use petgraph::prelude::*;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -57,6 +60,90 @@ struct RenamingPlan {
     steps: Vec<(PathBuf, PathBuf)>,
 }
 
+pub struct CycleBreaker {
+    renames: HashMap<PathBuf, PathBuf>,
+    steps: Vec<(PathBuf, PathBuf)>,
+    deferred_steps: Vec<(PathBuf, PathBuf)>,
+    visited: HashSet<PathBuf>,
+    temp_file_counter: u64,
+}
+
+impl CycleBreaker {
+    fn new(renames: HashMap<PathBuf, PathBuf>) -> Self {
+        Self {
+            renames,
+            deferred_steps: Vec::new(),
+            steps: Vec::new(),
+            visited: HashSet::new(),
+            temp_file_counter: 0,
+        }
+    }
+
+    fn break_cycles(&mut self) -> Vec<(PathBuf, PathBuf)> {
+        let keys: Vec<_> = self.renames.keys().cloned().collect();
+        for old in keys {
+            if !self.visited.contains(&old) {
+                self.dfs(&old);
+            }
+        }
+
+        // construct graph for topological sort
+        let mut node_indices: HashMap<PathBuf, NodeIndex> = HashMap::new();
+        let mut graph: DiGraph<PathBuf, (PathBuf, PathBuf)> = DiGraph::new();
+        for &(ref old, ref new) in &self.steps {
+            let old_idx = *node_indices
+                .entry(old.clone())
+                .or_insert_with(|| graph.add_node(old.clone()));
+            let new_idx = *node_indices
+                .entry(new.clone())
+                .or_insert_with(|| graph.add_node(new.clone()));
+            graph.add_edge(old_idx, new_idx, (old.clone(), new.clone()));
+        }
+
+        // topological sort
+        let sorted_indices = toposort(&graph, None)
+            .expect("Warning: cycles detected during topological sort, this should not happen.");
+
+        self.steps = sorted_indices
+            .into_iter()
+            .filter_map(|idx| graph.edges_directed(idx, Direction::Outgoing).next())
+            .map(|edge| edge.weight().clone())
+            .collect();
+
+        self.steps.reverse();
+
+        for (old, new) in &self.deferred_steps {
+            dbg!("adding", &old, &new);
+            self.steps.push((old.clone(), new.clone()));
+        }
+
+        self.steps.clone()
+    }
+
+    fn dfs(&mut self, node: &PathBuf) {
+        self.visited.insert(node.clone());
+        if let Some(neighbor) = self.renames.get(node) {
+            let neighbor = neighbor.clone();
+            if self.visited.contains(&neighbor) {
+                // cycle detected, create temporary file and insert it into the steps
+                let mut temp_file;
+                loop {
+                    temp_file = PathBuf::from(format!("_temp_{}", self.temp_file_counter));
+                    self.temp_file_counter += 1;
+                    if !temp_file.exists() {
+                        break;
+                    }
+                }
+                self.steps.push((node.clone(), temp_file.clone()));
+                self.deferred_steps.push((temp_file, neighbor.clone()));
+            } else {
+                self.steps.push((node.clone(), neighbor.clone()));
+                self.dfs(&neighbor);
+            }
+        }
+    }
+}
+
 impl RenamingPlan {
     fn try_new(request: RenamingRequest) -> Result<Self> {
         for (old, new) in request.mapping.iter() {
@@ -67,11 +154,14 @@ impl RenamingPlan {
             }
         }
 
-        let steps = request.mapping.clone();
+        // Using HashMap to store renaming requests
+        let renames: HashMap<PathBuf, PathBuf> = request.mapping.iter().cloned().collect();
+
+        let mut breaker = CycleBreaker::new(renames);
+        let steps = breaker.break_cycles();
 
         Ok(RenamingPlan { request, steps })
     }
-
     fn is_empty(&self) -> bool {
         self.request.is_empty()
     }

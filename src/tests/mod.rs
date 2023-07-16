@@ -1,5 +1,10 @@
 use crate::{bulk_rename, create_editable_temp_file_content, BumvConfiguration};
-use std::{cell::RefCell, fs::File, io::Write, rc::Rc};
+use std::{
+    cell::RefCell,
+    fs::{self, File},
+    io::Write,
+    rc::Rc,
+};
 use tempfile::{tempdir, TempDir};
 
 fn create_test_files(dir: &tempfile::TempDir) {
@@ -440,4 +445,122 @@ fn scenario_test_detect_overwrite_due_to_renaming_order() {
 
     assert!(err.to_string().contains("file2.txt already exists"));
     assert_no_files_changed(&dir);
+}
+
+#[test]
+fn direct_cycle_test() {
+    let dir = tempdir().unwrap();
+
+    // Create test files "a" and "b" with content "a" and "b"
+    let mut file_a =
+        File::create(dir.path().join("a_c15e4958-db22-4c10-a987-78c2a3a25562")).unwrap();
+    let mut file_b =
+        File::create(dir.path().join("b_c15e4958-db22-4c10-a987-78c2a3a25562")).unwrap();
+    writeln!(file_a, "a").unwrap();
+    writeln!(file_b, "b").unwrap();
+
+    let config = BumvConfiguration {
+        recursive: false,
+        no_ignore: false,
+        use_vscode: false,
+        base_path: Some(dir.path().to_path_buf()),
+    };
+
+    // Create a direct cycle: a -> b, b -> a
+    let _ = bulk_rename(
+        config,
+        |content| {
+            Ok({
+                let result = content
+                    .replace(
+                        "a_c15e4958-db22-4c10-a987-78c2a3a25562",
+                        "tmp_c15e4958-db22-4c10-a987-78c2a3a25562",
+                    )
+                    .replace(
+                        "b_c15e4958-db22-4c10-a987-78c2a3a25562",
+                        "a_c15e4958-db22-4c10-a987-78c2a3a25562",
+                    )
+                    .replace(
+                        "tmp_c15e4958-db22-4c10-a987-78c2a3a25562",
+                        "b_c15e4958-db22-4c10-a987-78c2a3a25562",
+                    );
+                dbg!(content, &result);
+                result
+            })
+        },
+        Box::new(|_| true),
+    )
+    .unwrap();
+
+    // Check the file content after renaming
+    let new_content_a =
+        fs::read_to_string(dir.path().join("a_c15e4958-db22-4c10-a987-78c2a3a25562")).unwrap();
+    let new_content_b =
+        fs::read_to_string(dir.path().join("b_c15e4958-db22-4c10-a987-78c2a3a25562")).unwrap();
+    assert_eq!(new_content_a, "b\n");
+    assert_eq!(new_content_b, "a\n");
+}
+
+#[test]
+fn longer_cycle_test() {
+    let dir = tempdir().unwrap();
+
+    // Create test files "a", "b" and "c" with content "a", "b" and "c"
+    let mut file_a =
+        File::create(dir.path().join("a_c15e4958-db22-4c10-a987-78c2a3a25562")).unwrap();
+    let mut file_b =
+        File::create(dir.path().join("b_c15e4958-db22-4c10-a987-78c2a3a25562")).unwrap();
+    let mut file_c =
+        File::create(dir.path().join("c_c15e4958-db22-4c10-a987-78c2a3a25562")).unwrap();
+    writeln!(file_a, "a").unwrap();
+    writeln!(file_b, "b").unwrap();
+    writeln!(file_c, "c").unwrap();
+
+    let config = BumvConfiguration {
+        recursive: false,
+        no_ignore: false,
+        use_vscode: false,
+        base_path: Some(dir.path().to_path_buf()),
+    };
+
+    // Create a longer cycle: a -> b, b -> c, c -> a
+    let _ = bulk_rename(
+        config,
+        |content| {
+            Ok({
+                let result = content
+                    .replace(
+                        "a_c15e4958-db22-4c10-a987-78c2a3a25562",
+                        "tmp_c15e4958-db22-4c10-a987-78c2a3a25562",
+                    )
+                    .replace(
+                        "c_c15e4958-db22-4c10-a987-78c2a3a25562",
+                        "a_c15e4958-db22-4c10-a987-78c2a3a25562",
+                    )
+                    .replace(
+                        "b_c15e4958-db22-4c10-a987-78c2a3a25562",
+                        "c_c15e4958-db22-4c10-a987-78c2a3a25562",
+                    )
+                    .replace(
+                        "tmp_c15e4958-db22-4c10-a987-78c2a3a25562",
+                        "b_c15e4958-db22-4c10-a987-78c2a3a25562",
+                    );
+                dbg!(content, &result);
+                result
+            })
+        },
+        Box::new(|_| true),
+    )
+    .unwrap();
+
+    // Check the file content after renaming
+    let new_content_a =
+        fs::read_to_string(dir.path().join("a_c15e4958-db22-4c10-a987-78c2a3a25562")).unwrap();
+    let new_content_b =
+        fs::read_to_string(dir.path().join("b_c15e4958-db22-4c10-a987-78c2a3a25562")).unwrap();
+    let new_content_c =
+        fs::read_to_string(dir.path().join("c_c15e4958-db22-4c10-a987-78c2a3a25562")).unwrap();
+    assert_eq!(new_content_a, "c\n");
+    assert_eq!(new_content_b, "a\n");
+    assert_eq!(new_content_c, "b\n");
 }

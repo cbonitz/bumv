@@ -3,7 +3,9 @@
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use petgraph::algo::toposort;
+use petgraph::graph::Graph;
 use petgraph::prelude::*;
+use petgraph::Directed;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -11,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use structopt::StructOpt;
 use tempfile::NamedTempFile;
-
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(
     name = "bumv",
@@ -60,105 +61,79 @@ struct RenamingPlan {
     steps: Vec<(PathBuf, PathBuf)>,
 }
 
-pub struct CycleBreaker {
-    renames: HashMap<PathBuf, PathBuf>,
-    steps: Vec<(PathBuf, PathBuf)>,
-    deferred_steps: Vec<(PathBuf, PathBuf)>,
-    visited: HashSet<PathBuf>,
-    temp_file_counter: u64,
-}
+fn break_cycles(renames: HashMap<PathBuf, PathBuf>) -> Vec<(PathBuf, PathBuf)> {
+    let mut graph = Graph::<PathBuf, (), Directed>::new();
+    let mut nodes = HashMap::<PathBuf, NodeIndex>::new();
+    let mut temp_file_counter = 0;
+    let mut deferred_steps = Vec::new();
 
-impl CycleBreaker {
-    fn new(renames: HashMap<PathBuf, PathBuf>) -> Self {
-        Self {
-            renames,
-            deferred_steps: Vec::new(),
-            steps: Vec::new(),
-            visited: HashSet::new(),
-            temp_file_counter: 0,
-        }
+    for (old, new) in renames {
+        let node_old = *nodes
+            .entry(old.clone())
+            .or_insert_with(|| graph.add_node(old.clone()));
+        let node_new = *nodes
+            .entry(new.clone())
+            .or_insert_with(|| graph.add_node(new.clone()));
+        graph.add_edge(node_old, node_new, ());
     }
 
-    fn break_cycles(&mut self) -> Vec<(PathBuf, PathBuf)> {
-        let keys: Vec<_> = self.renames.keys().cloned().collect();
-        for old in keys {
-            if !self.visited.contains(&old) {
-                self.dfs(&old);
+    while let Err(cycle) = toposort(&graph, None) {
+        let node_idx = cycle.node_id();
+        let old_path = graph[node_idx].clone();
+        let mut temp_file;
+        loop {
+            temp_file = old_path.with_file_name(format!(
+                "{}.n{}.tmp",
+                old_path.file_name().unwrap().to_str().unwrap(),
+                temp_file_counter
+            ));
+            temp_file_counter += 1;
+            if !temp_file.exists() {
+                break;
             }
         }
-
-        // construct graph for topological sort
-        let mut node_indices: HashMap<PathBuf, NodeIndex> = HashMap::new();
-        let mut graph: DiGraph<PathBuf, (PathBuf, PathBuf)> = DiGraph::new();
-        for &(ref old, ref new) in &self.steps {
-            let old_idx = *node_indices
-                .entry(old.clone())
-                .or_insert_with(|| graph.add_node(old.clone()));
-            let new_idx = *node_indices
-                .entry(new.clone())
-                .or_insert_with(|| graph.add_node(new.clone()));
-            graph.add_edge(old_idx, new_idx, (old.clone(), new.clone()));
-        }
-
-        // topological sort
-        let sorted_indices = toposort(&graph, None)
-            .expect("Warning: cycles detected during topological sort, this should not happen.");
-
-        self.steps = sorted_indices
-            .into_iter()
-            .filter_map(|idx| graph.edges_directed(idx, Direction::Outgoing).next())
-            .map(|edge| edge.weight().clone())
-            .collect();
-
-        self.steps.reverse();
-
-        for (old, new) in &self.deferred_steps {
-            dbg!("adding", &old, &new);
-            self.steps.push((old.clone(), new.clone()));
-        }
-
-        self.steps.clone()
+        let edges: Vec<_> = graph.edges(node_idx).collect();
+        let edge_causing_cycle = edges[0];
+        let target = edge_causing_cycle.target();
+        let target_path = graph[target].clone();
+        println!(
+            "Breaking cycle temporarily renaming {:?} to {:?}:",
+            old_path, temp_file
+        );
+        deferred_steps.push((temp_file.clone(), target_path));
+        graph.remove_edge(edge_causing_cycle.id());
+        let temp_file_node = graph.add_node(temp_file.clone());
+        graph.update_edge(node_idx, temp_file_node, ());
     }
 
-    fn dfs(&mut self, node: &PathBuf) {
-        self.visited.insert(node.clone());
-        if let Some(neighbor) = self.renames.get(node) {
-            let neighbor = neighbor.clone();
-            if self.visited.contains(&neighbor) {
-                // cycle detected, create temporary file and insert it into the steps
-                let mut temp_file;
-                loop {
-                    temp_file = PathBuf::from(format!("_temp_{}", self.temp_file_counter));
-                    self.temp_file_counter += 1;
-                    if !temp_file.exists() {
-                        break;
-                    }
-                }
-                self.steps.push((node.clone(), temp_file.clone()));
-                self.deferred_steps.push((temp_file, neighbor.clone()));
+    let sorted_indices = match toposort(&graph, None) {
+        Ok(sorted_indices) => sorted_indices,
+        Err(e) => panic!("Cycle detected even after breaking all cycles: {:?}", e),
+    };
+
+    let mut steps: Vec<_> = sorted_indices
+        .into_iter()
+        .filter_map(|idx| {
+            let edges: Vec<_> = graph.edges(idx).collect();
+            if !edges.is_empty() {
+                Some((graph[idx].clone(), graph[edges[0].target()].clone()))
             } else {
-                self.steps.push((node.clone(), neighbor.clone()));
-                self.dfs(&neighbor);
+                None
             }
-        }
-    }
+        })
+        .collect();
+    steps.reverse();
+    steps.append(&mut deferred_steps);
+
+    steps
 }
 
 impl RenamingPlan {
     fn try_new(request: RenamingRequest) -> Result<Self> {
-        for (old, new) in request.mapping.iter() {
-            if old.parent() != new.parent() {
-                anyhow::bail!(
-                    "Renaming directories and moving files to other directories is currently not supported.",
-                );
-            }
-        }
-
         // Using HashMap to store renaming requests
         let renames: HashMap<PathBuf, PathBuf> = request.mapping.iter().cloned().collect();
 
-        let mut breaker = CycleBreaker::new(renames);
-        let steps = breaker.break_cycles();
+        let steps = break_cycles(renames);
 
         Ok(RenamingPlan { request, steps })
     }
@@ -185,6 +160,11 @@ impl RenamingPlan {
 /// Perform the actual renaming of the files
 fn rename_files(rename_mapping: &Vec<(PathBuf, PathBuf)>) -> Result<()> {
     for (old, new) in rename_mapping {
+        if let Some(parent) = new.parent() {
+            if !parent.exists() {
+                fs::create_dir_all(parent)?;
+            }
+        }
         if new.exists() {
             anyhow::bail!(
                 "The file {} already exists. Aborting.",

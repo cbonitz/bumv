@@ -49,6 +49,7 @@ The following safety checks are implemented and tested:
 ```
 -n, --no-ignore    Do not observe ignore files
 -r, --recursive    Recursively rename files in subdirectories
+-c, --use-vscode   Use VS Code as editor
 ```
 
 ## Installation

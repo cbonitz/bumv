@@ -13,6 +13,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use structopt::StructOpt;
 use tempfile::NamedTempFile;
+
+#[cfg(target_os = "windows")]
+const VS_CODE: &str = "code.cmd";
+
+#[cfg(not(target_os = "windows"))]
+const VS_CODE: &str = "code";
+
 #[derive(StructOpt, Debug, Clone)]
 #[structopt(
     name = "bumv",
@@ -25,6 +32,9 @@ struct BumvConfiguration {
     /// Do not observe ignore files
     #[structopt(short, long)]
     no_ignore: bool,
+    /// Do not write a log file
+    #[structopt(long)]
+    no_log: bool,
     /// Use VS Code as editor
     #[structopt(short = "c", long)]
     use_vscode: bool,
@@ -182,6 +192,9 @@ impl RenamingPlan {
     fn execute(&self) -> Result<String> {
         self.request.ensure_files_did_not_change()?;
         rename_files(&self.steps)?;
+        if !self.request.config.no_log {
+            self.request.write_renaming_log_file();
+        }
         Ok("Files renamed successfully.".to_string())
     }
 }
@@ -272,6 +285,48 @@ impl RenamingRequest {
         );
         Ok(())
     }
+
+    // Create a logfile called bumv_{timestamp}.log in the base path of the renaming request containing
+    // the requested renaming mapping.
+    // The log file is based on the request, because the user is not interested in the temporary files
+    // created in the planning phase.
+    fn write_renaming_log_file(&self) {
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let log_file_name = format!("bumv_{}.log", timestamp);
+        // set the log file path to the base path of the renaming request
+        // or the current directory if none is specified.
+        let log_file_path = self
+            .config
+            .base_path
+            .clone()
+            .unwrap_or_else(|| Path::new(".").to_path_buf())
+            .join(log_file_name);
+        let mut log_file = File::create(log_file_path).unwrap();
+        // format the rename mapping to be tab separated, with nicely aligned columns
+        // first compute the longest lenght of the old filenames, then use this information
+        // for indentation
+        let max_old_filename_length = self
+            .mapping
+            .iter()
+            .map(|(old, _)| old.to_string_lossy().len())
+            .max()
+            .unwrap();
+        // create the log content
+        let log_content = self
+            .mapping
+            .iter()
+            .map(|(old, new)| {
+                format!(
+                    "{:width$}\t{}",
+                    old.to_string_lossy(),
+                    new.to_string_lossy(),
+                    width = max_old_filename_length
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        log_file.write_all(log_content.as_bytes()).unwrap();
+    }
 }
 
 struct TempFileEditor {
@@ -294,7 +349,7 @@ impl TempFileEditor {
             .context("Failed to convert path to string")?;
         let mut command = Command::new(&self.editor_name);
         // VS code needs the --wait flag to wait for the user to close the editor
-        if self.editor_name == "code" {
+        if self.editor_name == VS_CODE {
             command.arg("--wait");
         }
         let status = command.arg(temp_path).status()?;
@@ -351,10 +406,10 @@ fn main() -> Result<()> {
     let config = BumvConfiguration::from_args();
     let editor_var = std::env::var("EDITOR");
     let editor_name = match (config.use_vscode, editor_var) {
-        (true, _) => "code".to_string(),
+        (true, _) => VS_CODE.to_string(),
         (false, Ok(editor)) => editor,
         // default to VS code
-        (false, Err(_)) => "code".to_string(),
+        (false, Err(_)) => VS_CODE.to_string(),
     };
 
     let editor = TempFileEditor { editor_name };

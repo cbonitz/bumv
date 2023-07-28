@@ -1,6 +1,6 @@
 [package]
 name = "bumv"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "bumv (bulk move) lets you use your favorite editor to rename files"
 homepage = "https://github.com/cbonitz/bumv"
@@ -21,6 +21,7 @@ rprompt = "2.0.2"
 anyhow = "1.0.70"
 ignore = "0.4.10"
 petgraph = "0.6.3"
+chrono = "0.4.26"
 
 
 [dev-dependencies]

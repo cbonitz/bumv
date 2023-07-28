@@ -56,6 +56,7 @@ fn test_read_directory_files_nonrecursive() {
     let files = BumvConfiguration {
         recursive: false,
         no_ignore: false,
+        no_log: true,
         use_vscode: false,
         base_path: Some(dir.into_path()),
     }
@@ -75,6 +76,7 @@ fn test_read_directory_files_nonrecursive_no_ignore() {
     let files = BumvConfiguration {
         recursive: false,
         no_ignore: true,
+        no_log: true,
         use_vscode: false,
         base_path: Some(dir.into_path()),
     }
@@ -96,6 +98,7 @@ fn test_read_directory_files_recursive() {
     let files = BumvConfiguration {
         recursive: true,
         no_ignore: false,
+        no_log: true,
         use_vscode: false,
         base_path: Some(dir.into_path()),
     }
@@ -118,6 +121,7 @@ fn test_read_directory_files_recursive_no_ignore() {
     let files = BumvConfiguration {
         recursive: true,
         no_ignore: true,
+        no_log: true,
         use_vscode: false,
         base_path: Some(dir.into_path()),
     }
@@ -142,6 +146,7 @@ fn test_create_temp_file_content() {
     let files = BumvConfiguration {
         recursive: true,
         no_ignore: false,
+        no_log: true,
         use_vscode: false,
         base_path: Some(dir.into_path()),
     }
@@ -174,6 +179,7 @@ fn scenario_test_rename_files() {
     let config = BumvConfiguration {
         recursive: false,
         no_ignore: false,
+        no_log: true,
         use_vscode: false,
         base_path: Some(dir.path().to_path_buf()),
     };
@@ -231,6 +237,7 @@ fn scenario_test_rename_files_recursive() {
     let config = BumvConfiguration {
         recursive: true,
         no_ignore: false,
+        no_log: true,
         use_vscode: false,
         base_path: Some(dir.path().to_path_buf()),
     };
@@ -291,6 +298,7 @@ fn scenario_test_detect_duplicate_target_names() {
     let config = BumvConfiguration {
         recursive: false,
         no_ignore: false,
+        no_log: true,
         use_vscode: false,
         base_path: Some(dir.path().to_path_buf()),
     };
@@ -317,6 +325,7 @@ fn scenario_test_detect_invalid_editing() {
     let config = BumvConfiguration {
         recursive: false,
         no_ignore: false,
+        no_log: true,
         use_vscode: false,
         base_path: Some(dir.path().to_path_buf()),
     };
@@ -343,6 +352,7 @@ fn scenario_test_detect_directory_renaming() {
     let config = BumvConfiguration {
         recursive: true,
         no_ignore: false,
+        no_log: true,
         use_vscode: false,
         base_path: Some(dir.path().to_path_buf()),
     };
@@ -376,6 +386,7 @@ fn scenario_test_detect_changed_files() {
     let config = BumvConfiguration {
         recursive: false,
         no_ignore: false,
+        no_log: true,
         use_vscode: false,
         base_path: Some(dir.path().to_path_buf()),
     };
@@ -408,6 +419,7 @@ fn scenario_test_detect_overwrite_of_file_not_part_of_listing() {
     let config = BumvConfiguration {
         recursive: false,
         no_ignore: false,
+        no_log: true,
         use_vscode: false,
         base_path: Some(dir.path().to_path_buf()),
     };
@@ -432,6 +444,7 @@ fn scenario_test_detect_overwrite_of_new_file_not_part_of_listing() {
     let config = BumvConfiguration {
         recursive: false,
         no_ignore: false,
+        no_log: true,
         use_vscode: false,
         base_path: Some(dir.path().to_path_buf()),
     };
@@ -460,6 +473,7 @@ fn scenario_test_detect_fix_renaming_order() {
     let config = BumvConfiguration {
         recursive: false,
         no_ignore: false,
+        no_log: true,
         use_vscode: false,
         base_path: Some(dir.path().to_path_buf()),
     };
@@ -498,6 +512,7 @@ fn direct_cycle_test() {
     let config = BumvConfiguration {
         recursive: false,
         no_ignore: false,
+        no_log: true,
         use_vscode: false,
         base_path: Some(dir.path().to_path_buf()),
     };
@@ -535,6 +550,7 @@ fn longer_cycle_test() {
     let config = BumvConfiguration {
         recursive: true,
         no_ignore: false,
+        no_log: true,
         use_vscode: false,
         base_path: Some(dir.path().to_path_buf()),
     };

@@ -48,6 +48,7 @@ The following safety checks are implemented and tested:
 
 ```
 -n, --no-ignore    Do not observe ignore files
+    --no-log       Do not write a log file
 -r, --recursive    Recursively rename files in subdirectories
 -c, --use-vscode   Use VS Code as editor
 ```
